@@ -1,0 +1,31 @@
+beautifulsoup4==4.11.1
+datasets==2.12.0
+huggingface-hub==0.16.4
+lxml==4.9.1
+numpy==1.23.5
+pandas==1.5.2
+psutil==5.9.4
+tensorboard==2.11.0
+tensorboard-data-server==0.6.1
+tensorboard-plugin-wit==1.8.1
+tokenizers==0.13.3
+#--find-links https://download.pytorch.org/whl/cu116
+#torch==1.13.1+cu116 # use pip install torch==1.13.1+cu116 torchvision==0.14.1+cu116 torchaudio==0.13.1 --extra-index-url https://download.pytorch.org/whl/cu116
+torch-tb-profiler==0.4.1
+torchtext==0.14.1
+torchvision==0.14.1
+tqdm
+transformers==4.27.4
+pycocotools==2.0.6
+openai==0.27.2
+nltk==3.6.7
+easynmt==2.0.2
+sacremoses==0.0.53
+wandb==0.14.2
+git+https://github.com/Maluuba/nlg-eval.git@master
+sentence-transformers==2.2.2
+scipy==1.10.1
+ray==2.6.1 # pip install "ray[tune]"
+nlpaug==1.1.11
+protobuf==3.20.3
+hyperopt==0.2.7

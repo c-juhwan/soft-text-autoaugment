@@ -12,12 +12,16 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 from sklearn.metrics import f1_score
+import wandb
+from wandb import AlertLevel
 import ray
 from ray import air, tune
 from ray.air import session
+from ray.air.integrations.wandb import WandbLoggerCallback
 from ray.tune.search.hyperopt import HyperOptSearch
 from ray.tune.schedulers import AsyncHyperBandScheduler
-import nlpaug.augmenter.word as naw
+#import nlpaug.augmenter.word as naw
+from textaugment import EDA
 # Pytorch Modules
 import torch
 torch.set_num_threads(2) # This prevents Pytorch from taking all cpus
@@ -40,6 +44,17 @@ from .preprocessing import load_data
 Text autoaugment for classification using ray tune
 """
 
+Trial_Num = 0
+log_df = pd.DataFrame({
+    'Dataset': [],
+    'Model': [],
+    'Trial_Num': [],
+    'ts': [],
+    'Policy': [],
+    'Best Epoch': [],
+    'Best ACC': [],
+})
+
 def search(args):
     """
     Main function for searching augmentation policy & label smoothing eps
@@ -52,30 +67,76 @@ def search(args):
     # Setup
     setup_dict = setup(args)
 
+    """
+    if args.use_wandb:
+        wandb.init(project=args.proj_name,
+            name=get_wandb_exp_name(args),
+            config=args,
+            notes=args.description,
+            tags=["SEARCH",
+                  f"Dataset: {args.task_dataset}",
+                  f"Model: {args.model_type}"])
+    """
+
     tuner = tune.Tuner(tune.with_resources(
                            tune.with_parameters(objective),
-                           resources={"cpu":2, "gpu":1}
+                           resources={"cpu":1, "gpu":0.5}
                        ),
                        tune_config=tune.TuneConfig(
-                            num_samples=1,
-                            metric=f'best_{args.optimize_objective}',
+                            num_samples=10,
+                            max_concurrent_trials=2,
+                            #metric=f'best_{args.optimize_objective}',
                             mode='max' if args.optimize_objective in ['accuracy', 'f1'] else 'min',
                             scheduler=AsyncHyperBandScheduler(),
                             search_alg=HyperOptSearch(),
                         ),
-                       #run_config=air.RunConfig(failure_config=air.FailureConfig(max_failures=5)),
+                       run_config=air.RunConfig(
+                           callbacks=[WandbLoggerCallback(
+                               project=args.proj_name,
+                               log_config=True,
+                               **{
+                                    "name": get_wandb_exp_name(args),
+                                    "config": args,
+                                    "notes": args.description,
+                                    "tags": ["SEARCH",
+                                            f"Dataset: {args.task_dataset}",
+                                            f"Model: {args.model_type}"],
+                               }
+                           )]
+                        ),
                        param_space=policy_search_space)
 
     # Search
-    tuner.fit()
+    result_grid = tuner.fit()
+    best_config = result_grid.get_best_result().config
+    best_policy = {
+        'aug_prob': best_config['aug_prob'],
+        'aug_prob_SR': best_config['aug_prob_SR'],
+        'aug_prob_RI': best_config['aug_prob_RI'],
+        'aug_prob_RS': best_config['aug_prob_RS'],
+        'aug_prob_RD': best_config['aug_prob_RD'],
+        'aug_magn_SR': best_config['aug_magn_SR'],
+        'aug_magn_RI': best_config['aug_magn_RI'],
+        'aug_magn_RS': best_config['aug_magn_RS'],
+        'aug_magn_RD': best_config['aug_magn_RD'],
+        'aug_num': best_config['aug_num'],
+        'ls_eps_ori': best_config['ls_eps_ori'],
+        'ls_eps_aug': best_config['ls_eps_aug'],
+    }
 
-    best_policy = tuner.get_best_config(metric=f'best_{args.optimize_objective}', mode='max')
     print(f"Best policy: {best_policy}")
 
-def sample_augmentation_type():
-    augmentation_type_prob = [np.random.uniform(0.0, 1.0) for _ in range(len(policy_search_config['augmentation_type']))]
-    # Sum of augmentation_type_prob should be 1.0
-    augmentation_type_prob = [prob / sum(augmentation_type_prob) for prob in augmentation_type_prob] # Normalize
+    augmented_train_data, soft_valid_data, soft_test_data, num_classes = augment_data(args, best_config)
+    ts = preprocess_augmented_data(args, augmented_train_data, soft_valid_data, soft_test_data, num_classes, best_config, searched=True)
+
+    """
+    if args.use_wandb:
+        global log_df
+        wandb_table = wandb.Table(dataframe=log_df)
+        wandb.log({'search_log': wandb_table})
+        wandb.finish()
+    """
+
 
 def setup(args):
     global device, logger, policy_search_config, policy_search_space
@@ -91,48 +152,37 @@ def setup(args):
     logger.addHandler(handler)
     logger.propagate = False
 
-    if args.use_wandb:
-        import wandb # Only import wandb when it is used
-        from wandb import AlertLevel
-        wandb.init(project=args.proj_name,
-            name=get_wandb_exp_name(args),
-            config=args,
-            notes=args.description,
-            tags=["SEARCH",
-                  f"Dataset: {args.task_dataset}",
-                  f"Model: {args.model_type}"])
-
     policy_search_config = {
-        'augmentation_type': ['SR', 'RI', 'RS', 'RD'],
-        'augmentation_type_prob': [0.0, 0.5],
-        'augmentation_magnitude': [0.0, 0.5],
-        'augmentation_prob': [0.0, 0.5],
-        'augmentation_num': [1, 5],
+        'aug_type': ['SR', 'RI', 'RS', 'RD'],
+        'aug_type_prob': [0.0, 0.5],
+        'aug_magnitude': [0.0, 0.5],
+        'aug_prob': [0.0, 0.5],
+        'aug_num': [1, 5],
         'label_smoothing_eps': [0.0, 0.5],
     }
 
     augmentation_magnitude_prob = [
-        np.random.uniform(policy_search_config['augmentation_magnitude'][0], policy_search_config['augmentation_magnitude'][1]) for _ in range(len(policy_search_config['augmentation_type']))
+        np.random.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]) for _ in range(len(policy_search_config['aug_type']))
     ]
 
     # Mapping augmentation type with each augmentation magnitude
     augmentation_magnitude_dict = {}
-    for augmentation_type, augmentation_magnitude in zip(policy_search_config['augmentation_type'], augmentation_magnitude_prob):
+    for augmentation_type, augmentation_magnitude in zip(policy_search_config['aug_type'], augmentation_magnitude_prob):
         augmentation_magnitude_dict[augmentation_type] = augmentation_magnitude
 
     policy_search_space = {
-        'augmentation_prob': tune.uniform(policy_search_config['augmentation_type_prob'][0], policy_search_config['augmentation_type_prob'][1]),
-        'augmentation_prob_SR': tune.uniform(policy_search_config['augmentation_prob'][0], policy_search_config['augmentation_prob'][1]),
-        'augmentation_prob_RI': tune.uniform(policy_search_config['augmentation_prob'][0], policy_search_config['augmentation_prob'][1]),
-        'augmentation_prob_RS': tune.uniform(policy_search_config['augmentation_prob'][0], policy_search_config['augmentation_prob'][1]),
-        'augmentation_prob_RD': tune.uniform(policy_search_config['augmentation_prob'][0], policy_search_config['augmentation_prob'][1]),
-        'augmentation_magn_SR': tune.uniform(policy_search_config['augmentation_magnitude'][0], policy_search_config['augmentation_magnitude'][1]),
-        'augmentation_magn_RI': tune.uniform(policy_search_config['augmentation_magnitude'][0], policy_search_config['augmentation_magnitude'][1]),
-        'augmentation_magn_RS': tune.uniform(policy_search_config['augmentation_magnitude'][0], policy_search_config['augmentation_magnitude'][1]),
-        'augmentation_magn_RD': tune.uniform(policy_search_config['augmentation_magnitude'][0], policy_search_config['augmentation_magnitude'][1]),
-        'augmentation_num': tune.randint(policy_search_config['augmentation_num'][0], policy_search_config['augmentation_num'][1]),
-        'label_smoothing_eps_ori': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]),
-        'label_smoothing_eps_aug': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]),
+        'aug_prob': tune.uniform(policy_search_config['aug_type_prob'][0], policy_search_config['aug_type_prob'][1]),
+        'aug_prob_SR': tune.uniform(policy_search_config['aug_prob'][0], policy_search_config['aug_prob'][1]),
+        'aug_prob_RI': tune.uniform(policy_search_config['aug_prob'][0], policy_search_config['aug_prob'][1]),
+        'aug_prob_RS': tune.uniform(policy_search_config['aug_prob'][0], policy_search_config['aug_prob'][1]),
+        'aug_prob_RD': tune.uniform(policy_search_config['aug_prob'][0], policy_search_config['aug_prob'][1]),
+        'aug_magn_SR': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
+        'aug_magn_RI': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
+        'aug_magn_RS': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
+        'aug_magn_RD': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
+        'aug_num': tune.randint(policy_search_config['aug_num'][0], policy_search_config['aug_num'][1]),
+        'ls_eps_ori': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]),
+        'ls_eps_aug': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]),
         'args': args,
     }
 
@@ -153,12 +203,7 @@ def augment_data(args, config):
     # Load data
     train_data, valid_data, test_data, num_classes = load_data(args)
 
-    augmenters = {
-        'SR': naw.RandomWordAug(action='substitute', aug_p=config['augmentation_magn_SR']),
-        'RI': naw.RandomWordAug(action='substitute', aug_p=config['augmentation_magn_RI']),
-        'RS': naw.RandomWordAug(action='swap', aug_p=config['augmentation_magn_RS']),
-        'RD': naw.RandomWordAug(action='delete', aug_p=config['augmentation_magn_RD']),
-    }
+    augmenter = EDA()
 
     # Construct augmented dataset
     augmented_train_data = {
@@ -182,21 +227,32 @@ def augment_data(args, config):
         augmented_train_data['text'].append(text)
         augmented_train_data['label'].append(label)
         soft_label = [0.0] * num_classes # Initialize soft label - list of 0.0s with length of num_classes
-        soft_label = [(1.0 - config['label_smoothing_eps_ori']) if i == label else (config['label_smoothing_eps_ori'] / (num_classes - 1)) for i in range(num_classes)]
+        soft_label = [(1.0 - config['ls_eps_ori']) if i == label else (config['ls_eps_ori'] / (num_classes - 1)) for i in range(num_classes)]
         augmented_train_data['soft_label'].append(soft_label)
 
         # Augment data and append augmented data with label smoothing
-        if np.random.uniform(0.0, 1.0) < config['augmentation_prob']: # Augment or not
+        if np.random.uniform(0.0, 1.0) < config['aug_prob']: # Augment or not
             # Select augmentation type randomly
-            augmentation_type_prob = [config['augmentation_prob_SR'], config['augmentation_prob_RI'], config['augmentation_prob_RS'], config['augmentation_prob_RD']]
+            augmentation_type_prob = [config['aug_prob_SR'], config['aug_prob_RI'], config['aug_prob_RS'], config['aug_prob_RD']]
             # Sum of augmentation_type_prob should be 1.0
             augmentation_type_prob = [prob / sum(augmentation_type_prob) for prob in augmentation_type_prob] # Normalize
             augmentation_type = np.random.choice(['SR', 'RI', 'RS', 'RD'], p=augmentation_type_prob)
 
             # Augment data using selected augmentation type
-            augmented_text = augmenters[augmentation_type].augment(text, n=config['augmentation_num'])
+            len_words = len(text.split())
+            n_to_modify = max(1, int(config['aug_magn_' + augmentation_type] * len_words)) # Number of words to modify, minimum 1
+            augmented_text = []
+            if augmentation_type == 'SR':
+                augmented_text = [augmenter.synonym_replacement(text, n=n_to_modify) for _ in range(config['aug_num'])] # Augment n times
+            elif augmentation_type == 'RI':
+                augmented_text = [augmenter.random_insertion(text, n=n_to_modify) for _ in range(config['aug_num'])]
+            elif augmentation_type == 'RS':
+                augmented_text = [augmenter.random_swap(text, n=n_to_modify) for _ in range(config['aug_num'])]
+            elif augmentation_type == 'RD':
+                augmented_text = [augmenter.random_deletion(text, p=config['aug_magn_RD']) for _ in range(config['aug_num'])]
+
             soft_label = [0.0] * num_classes # Initialize soft label - list of 0.0s with length of num_classes
-            soft_label = [(1.0 - config['label_smoothing_eps_aug']) if i == label else (config['label_smoothing_eps_ori'] / (num_classes - 1)) for i in range(num_classes)]
+            soft_label = [(1.0 - config['ls_eps_aug']) if i == label else (config['ls_eps_ori'] / (num_classes - 1)) for i in range(num_classes)]
 
             # Append augmented data with label smoothing
             for each_augmented_text in augmented_text:
@@ -225,7 +281,7 @@ def augment_data(args, config):
 
     return augmented_train_data, soft_valid_data, soft_test_data, num_classes
 
-def preprocess_augmented_data(args, augmented_train_data, soft_valid_data, soft_test_data, num_classes, config):
+def preprocess_augmented_data(args, augmented_train_data, soft_valid_data, soft_test_data, num_classes, config, searched=False):
     # Define tokenizer & config
     model_name = get_huggingface_model_name(args.model_type)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -303,7 +359,12 @@ def preprocess_augmented_data(args, augmented_train_data, soft_valid_data, soft_
             data_dict[split]['soft_labels'].append(torch.tensor(soft_label, dtype=torch.float)) # Label Smoothing Loss
 
         # Save data as pickle file
-        with open(os.path.join(preprocessed_path, f'{split}_search_processed_{ts}.pkl'), 'wb') as f:
+        if searched: # Optimal policy searched through AutoAugment
+            save_name = f'{split}_optimal_processed_{ts}.pkl'
+            print(f"Saving augmented data with searched optimal policy to {os.path.join(preprocessed_path, save_name)}")
+        else:
+            save_name = f'{split}_search_processed_{ts}.pkl'
+        with open(os.path.join(preprocessed_path, save_name), 'wb') as f:
             pickle.dump(data_dict[split], f)
 
     return ts
@@ -445,16 +506,17 @@ def evaluate_policy(args, policy, ts):
 
     # Valid - Logging
     if args.use_wandb:
-        wandb_df = pd.DataFrame({
-            'Dataset': [args.task_dataset],
-            'Model': [args.model_type],
-            'ts': [ts],
-            'Policy': [policy],
-            'Best Epoch': [best_epoch_idx],
-            f'Best {args.optimize_objective.capitalize()}': [best_valid_objective_value]
-        })
-        wandb_table = wandb.Table(dataframe=wandb_df)
-        wandb.log({'SEARCH': wandb_table})
+        global log_df, Trial_Num
+        Trial_Num += 1
+        log_df = log_df.append({
+            'Dataset': args.task_dataset,
+            'Model': args.model_type,
+            'Trial_Num': Trial_Num,
+            'ts': ts,
+            'Policy': policy,
+            'Best Epoch': best_epoch_idx,
+            'Best ACC': best_valid_objective_value,
+        }, ignore_index=True)
 
     return best_epoch_idx, best_valid_objective_value
 
@@ -465,6 +527,6 @@ def objective(config, checkpoint_dir=None):
     ts = preprocess_augmented_data(config['args'], augmented_train_data, soft_valid_data, soft_test_data, num_classes, config)
     _, best_valid_objective_value = evaluate_policy(config['args'], config, ts)
 
-    session.report({f"best_{args_.optimize_objective}": best_valid_objective_value})
+    session.report({f"best_{config['args'].optimize_objective}": best_valid_objective_value})
 
     return best_valid_objective_value

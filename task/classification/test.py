@@ -61,7 +61,17 @@ def testing(args: argparse.Namespace) -> tuple:
 
     # Load model weights
     write_log(logger, "Loading model weights")
-    load_model_name = os.path.join(args.model_path, args.task, args.task_dataset, args.model_type, 'final_model.pt')
+    if args.augmentation_type == 'none':
+        final_model_save_name = 'final_model_noaug.pt'
+    elif args.augmentation_type in ['hard_eda', 'soft_eda', 'aeda']:
+        final_model_save_name = f'final_model_{args.augmentation_type}.pt'
+    elif args.augmentation_type == 'soft_text_autoaugment_searched':
+        final_model_save_name = 'final_model_softtaa.pt'
+    elif args.augmentation_type == 'ablation_no_labelsmoothing':
+        final_model_save_name = 'final_model_ablation_nols.pt'
+    elif args.augmentation_type == 'ablation_generalization':
+        final_model_save_name = 'final_model_ablation_generalization.pt'
+    load_model_name = os.path.join(args.model_path, args.task, args.task_dataset, args.model_type, final_model_save_name)
     model = model.to('cpu')
     checkpoint = torch.load(load_model_name, map_location='cpu')
     model.load_state_dict(checkpoint['model'])

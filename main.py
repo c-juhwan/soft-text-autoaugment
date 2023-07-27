@@ -25,6 +25,8 @@ def main(args: argparse.Namespace) -> None:
                 from task.classification.preprocessing import preprocessing as job
             elif args.job in ['training', 'resume_training']:
                 from task.classification.train import training as job
+            elif args.job == 'augment':
+                from task.classification.augment import augmentation as job
             elif args.job in 'search':
                 from task.classification.search import search as job
             elif args.job == 'testing':

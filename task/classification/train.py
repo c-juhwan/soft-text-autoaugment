@@ -39,8 +39,19 @@ def training(args: argparse.Namespace) -> None:
     # Load dataset and define dataloader
     write_log(logger, "Loading data")
     dataset_dict, dataloader_dict = {}, {}
-    dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'train_processed.pkl'))
-    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'valid_processed.pkl'))
+    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, 'valid_processed.pkl'))
+    if args.augmentation_type == 'none':
+        dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, 'train_processed.pkl'))
+    elif args.augmentation_type in ['hard_eda', 'soft_eda', 'aeda']:
+        dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'train_augmented_{args.augmentation_type}.pkl'))
+    elif args.augmentation_type == 'soft_text_autoaugment_searched':
+        dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, 'train_optimal_augmented.pkl'))
+    elif args.augmentation_type == 'ablation_no_labelsmoothing':
+        dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, 'train_optimal_augmented_ablation.pkl'))
+    elif args.augmentation_type == 'ablation_generalization':
+        # BERT model -> DeBERTa data
+        # DeBERTa model -> BERT data
+        raise NotImplementedError
 
     dataloader_dict['train'] = DataLoader(dataset_dict['train'], batch_size=args.batch_size, num_workers=args.num_workers,
                                           shuffle=True, pin_memory=True, drop_last=True)
@@ -284,8 +295,18 @@ def training(args: argparse.Namespace) -> None:
 
     # Final - Save best checkpoint as result model
     final_model_save_path = os.path.join(args.model_path, args.task, args.task_dataset, args.model_type)
+    if args.augmentation_type == 'none':
+        final_model_save_name = 'final_model_noaug.pt'
+    elif args.augmentation_type in ['hard_eda', 'soft_eda', 'aeda']:
+        final_model_save_name = f'final_model_{args.augmentation_type}.pt'
+    elif args.augmentation_type == 'soft_text_autoaugment_searched':
+        final_model_save_name = 'final_model_softtaa.pt'
+    elif args.augmentation_type == 'ablation_no_labelsmoothing':
+        final_model_save_name = 'final_model_ablation_nols.pt'
+    elif args.augmentation_type == 'ablation_generalization':
+        final_model_save_name = 'final_model_ablation_generalization.pt'
     check_path(final_model_save_path)
-    shutil.copyfile(os.path.join(checkpoint_save_path, 'checkpoint.pt'), os.path.join(final_model_save_path, 'final_model.pt')) # Copy best checkpoint as final model
+    shutil.copyfile(os.path.join(checkpoint_save_path, 'checkpoint.pt'), os.path.join(final_model_save_path, final_model_save_name)) # Copy best checkpoint as final model
     write_log(logger, f"FINAL - Saved final model to {final_model_save_path}")
 
     if args.use_wandb:

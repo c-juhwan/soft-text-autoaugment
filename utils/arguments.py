@@ -44,6 +44,9 @@ class ArgParser():
                                  help='Type of the classification model to use.')
         self.parser.add_argument('--model_ispretrained', type=parse_bool, default=True,
                                  help='Whether to use pretrained model; Default is True')
+        augmentation_type_list = ['none', 'hard_eda', 'soft_eda', 'aeda', 'soft_text_autoaugment_searched', 'ablation_no_labelsmoothing', 'ablation_generalization']
+        self.parser.add_argument('--augmentation_type', type=str, choices=augmentation_type_list, default='none',
+                                 help='Type of the augmentation to use; Default is none')
         self.parser.add_argument('--rnn_isbidirectional', type=parse_bool, default=True,
                                  help='Whether to use bidirectional RNNs; Default is True')
         self.parser.add_argument('--min_seq_len', type=int, default=4,
@@ -52,6 +55,8 @@ class ArgParser():
                                  help='Maximum sequence length of the input; Default is 100')
         self.parser.add_argument('--dropout_rate', type=float, default=0.2,
                                  help='Dropout rate of the model; Default is 0.2')
+        self.parser.add_argument('--softeda_smoothing', type=float, default=0.1,
+                                 help='Label smoothing epsilon for softEDA; Default is 0.1')
 
         # Model - Size arguments
         self.parser.add_argument('--embed_size', type=int, default=768, # Will be automatically specified by the model type if model is PLM
@@ -87,8 +92,6 @@ class ArgParser():
                                  help='Weight decay; Default is 5e-4; If 0, no weight decay')
         self.parser.add_argument('--clip_grad_norm', type=int, default=5,
                                  help='Gradient clipping norm; Default is 5')
-        self.parser.add_argument('--label_smoothing_eps', type=float, default=0.05,
-                                 help='Label smoothing epsilon; Default is 0.05')
         self.parser.add_argument('--early_stopping_patience', type=int, default=5,
                                  help='Early stopping patience; No early stopping if None; Default is 5')
         self.parser.add_argument('--train_valid_split', type=float, default=0.2,

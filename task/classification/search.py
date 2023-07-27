@@ -8,6 +8,11 @@ import logging
 import argparse
 # 3rd-party Modules
 import bs4
+import nltk
+nltk.download('wordnet')
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('omw-1.4')
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
@@ -83,7 +88,7 @@ def search(args):
                            resources={"cpu":1, "gpu":0.5}
                        ),
                        tune_config=tune.TuneConfig(
-                            num_samples=10,
+                            num_samples=4,
                             max_concurrent_trials=2,
                             #metric=f'best_{args.optimize_objective}',
                             mode='max' if args.optimize_objective in ['accuracy', 'f1'] else 'min',
@@ -95,7 +100,8 @@ def search(args):
                                project=args.proj_name,
                                log_config=True,
                                **{
-                                    "name": get_wandb_exp_name(args),
+                                    "name": f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()}" if args.augmentation_type != 'ablation_no_labelsmoothing'
+                                            else f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / ablation_no_labelsmoothing",
                                     "config": args,
                                     "notes": args.description,
                                     "tags": ["SEARCH",
@@ -126,8 +132,8 @@ def search(args):
 
     print(f"Best policy: {best_policy}")
 
-    augmented_train_data, soft_valid_data, soft_test_data, num_classes = augment_data(args, best_config)
-    ts = preprocess_augmented_data(args, augmented_train_data, soft_valid_data, soft_test_data, num_classes, best_config, searched=True)
+    augmented_train_data, num_classes = augment_data(args, best_config)
+    ts = preprocess_augmented_data(args, augmented_train_data, num_classes, best_config, searched=True)
 
     """
     if args.use_wandb:
@@ -181,8 +187,8 @@ def setup(args):
         'aug_magn_RS': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
         'aug_magn_RD': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
         'aug_num': tune.randint(policy_search_config['aug_num'][0], policy_search_config['aug_num'][1]),
-        'ls_eps_ori': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]),
-        'ls_eps_aug': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]),
+        'ls_eps_ori': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type_list != 'ablation_no_labelsmoothing' else 0.0,
+        'ls_eps_aug': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type_list != 'ablation_no_labelsmoothing' else 0.0,
         'args': args,
     }
 
@@ -201,22 +207,12 @@ def augment_data(args, config):
     """
 
     # Load data
-    train_data, valid_data, test_data, num_classes = load_data(args)
+    train_data, _, _, num_classes = load_data(args)
 
     augmenter = EDA()
 
     # Construct augmented dataset
     augmented_train_data = {
-        'text': [],
-        'label': [],
-        'soft_label': [],
-    }
-    soft_valid_data = {
-        'text': [],
-        'label': [],
-        'soft_label': [],
-    }
-    soft_test_data = {
         'text': [],
         'label': [],
         'soft_label': [],
@@ -260,28 +256,9 @@ def augment_data(args, config):
                 augmented_train_data['label'].append(label)
                 augmented_train_data['soft_label'].append(soft_label)
 
-    # Add soft_label to valid_data and test_data
-    for text, label in zip(valid_data['text'], valid_data['label']):
-        soft_label = [0.0] * num_classes
-        if label != -1:
-            soft_label[label] = 1.0
+    return augmented_train_data, num_classes
 
-        soft_valid_data['text'].append(text)
-        soft_valid_data['label'].append(label)
-        soft_valid_data['soft_label'].append(soft_label)
-
-    for text, label in zip(test_data['text'], test_data['label']):
-        soft_label = [0.0] * num_classes
-        if label != -1:
-            soft_label[label] = 1.0
-
-        soft_test_data['text'].append(text)
-        soft_test_data['label'].append(label)
-        soft_test_data['soft_label'].append(soft_label)
-
-    return augmented_train_data, soft_valid_data, soft_test_data, num_classes
-
-def preprocess_augmented_data(args, augmented_train_data, soft_valid_data, soft_test_data, num_classes, config, searched=False):
+def preprocess_augmented_data(args, augmented_train_data, num_classes, config, searched=False):
     # Define tokenizer & config
     model_name = get_huggingface_model_name(args.model_type)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -292,80 +269,59 @@ def preprocess_augmented_data(args, augmented_train_data, soft_valid_data, soft_
     check_path(preprocessed_path)
 
     # Preprocessing - Define data_dict
-    data_dict = {
-        'train': {
-            'input_ids': [],
-            'attention_mask': [],
-            'token_type_ids': [],
-            'labels': [],
-            'soft_labels': [],
-            'num_classes': num_classes,
-            'vocab_size': hf_config.vocab_size,
-            'pad_token_id': tokenizer.pad_token_id,
-            'augmentation_policy': config,
-        },
-        'valid': {
-            'input_ids': [],
-            'attention_mask': [],
-            'token_type_ids': [],
-            'labels': [],
-            'soft_labels': [],
-            'num_classes': num_classes,
-            'vocab_size': hf_config.vocab_size,
-            'pad_token_id': tokenizer.pad_token_id,
-            'augmentation_policy': config,
-        },
-        'test': {
-            'input_ids': [],
-            'attention_mask': [],
-            'token_type_ids': [],
-            'labels': [],
-            'soft_labels': [],
-            'num_classes': num_classes,
-            'vocab_size': hf_config.vocab_size,
-            'pad_token_id': tokenizer.pad_token_id,
-            'augmentation_policy': config,
-        }
+    augmented_data = {
+        'input_ids': [],
+        'attention_mask': [],
+        'token_type_ids': [],
+        'labels': [],
+        'soft_labels': [],
+        'num_classes': augmented_train_data['num_classes'],
+        'vocab_size': augmented_train_data['vocab_size'],
+        'pad_token_id': augmented_train_data['pad_token_id'],
+        'augmentation_policy': augmented_train_data['augmentation_policy'], # None.
     }
 
     ts = time.strftime('%Y-%b-%d-%H:%M:%S', time.localtime())
 
-    for split_data, split in zip([augmented_train_data, soft_valid_data, soft_test_data], ['train', 'valid', 'test']):
-        for idx in range(len(split_data['text'])):
-            # Get text and label
-            text = split_data['text'][idx]
-            label = split_data['label'][idx]
-            soft_label = split_data['soft_label'][idx]
+    for idx in range(len(augmented_train_data['text'])):
+        # Get text and label
+        text = augmented_train_data['text'][idx]
+        label = augmented_train_data['label'][idx]
+        soft_label = augmented_train_data['soft_label'][idx]
 
-            # Remove html tags
-            clean_text = bs4.BeautifulSoup(text, 'lxml').text
-            # Remove special characters
-            clean_text = clean_text.replace('\n', ' ').replace('\t', ' ').replace('\r', ' ')
-            # Remove multiple spaces
-            clean_text = ' '.join(clean_text.split())
+        # Remove html tags
+        clean_text = bs4.BeautifulSoup(text, 'lxml').text
+        # Remove special characters
+        clean_text = clean_text.replace('\n', ' ').replace('\t', ' ').replace('\r', ' ')
+        # Remove multiple spaces
+        clean_text = ' '.join(clean_text.split())
 
-            # Tokenize
-            tokenized = tokenizer(clean_text, padding='max_length', truncation=True,
-                                  max_length=args.max_seq_len, return_tensors='pt')
+        # Tokenize
+        tokenized = tokenizer(clean_text, padding='max_length', truncation=True,
+                                max_length=args.max_seq_len, return_tensors='pt')
 
-            # Add data to data_dict
-            data_dict[split]['input_ids'].append(tokenized['input_ids'].squeeze())
-            data_dict[split]['attention_mask'].append(tokenized['attention_mask'].squeeze())
-            if args.model_type in ['bert', 'albert', 'electra', 'deberta', 'debertav3']:
-                data_dict[split]['token_type_ids'].append(tokenized['token_type_ids'].squeeze())
-            else: # roberta does not use token_type_ids
-                data_dict[split]['token_type_ids'].append(torch.zeros(args.max_seq_len, dtype=torch.long))
-            data_dict[split]['labels'].append(torch.tensor(label, dtype=torch.long)) # Cross Entropy Loss
-            data_dict[split]['soft_labels'].append(torch.tensor(soft_label, dtype=torch.float)) # Label Smoothing Loss
+        # Add data to data_dict
+        augmented_data['input_ids'].append(tokenized['input_ids'].squeeze())
+        augmented_data['attention_mask'].append(tokenized['attention_mask'].squeeze())
+        if args.model_type in ['bert', 'albert', 'electra', 'deberta', 'debertav3']:
+            augmented_data['token_type_ids'].append(tokenized['token_type_ids'].squeeze())
+        else: # roberta does not use token_type_ids
+            augmented_data['token_type_ids'].append(torch.zeros(args.max_seq_len, dtype=torch.long))
+        augmented_data['labels'].append(torch.tensor(label, dtype=torch.long)) # Cross Entropy Loss
+        augmented_data['soft_labels'].append(torch.tensor(soft_label, dtype=torch.float)) # Label Smoothing Loss
 
-        # Save data as pickle file
-        if searched: # Optimal policy searched through AutoAugment
-            save_name = f'{split}_optimal_processed_{ts}.pkl'
-            print(f"Saving augmented data with searched optimal policy to {os.path.join(preprocessed_path, save_name)}")
+    # Save data as pickle file
+    if searched: # Optimal policy searched through AutoAugment
+        if args.augmentation_type_list == 'ablation_no_labelsmoothing':
+            save_name = f'train_optimal_augmented_ablation.pkl'
         else:
-            save_name = f'{split}_search_processed_{ts}.pkl'
-        with open(os.path.join(preprocessed_path, save_name), 'wb') as f:
-            pickle.dump(data_dict[split], f)
+            save_name = f'train_optimal_augmented.pkl'
+
+        print(f"Saving augmented data with searched optimal policy to {os.path.join(preprocessed_path, save_name)}")
+    else:
+        save_name = f'train_search_processed_{ts}.pkl'
+    with open(os.path.join(preprocessed_path, save_name), 'wb') as f:
+        pickle.dump(augmented_data, f)
 
     return ts
 
@@ -378,7 +334,7 @@ def evaluate_policy(args, policy, ts):
 
     dataset_dict, dataloader_dict = {}, {}
     dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'train_search_processed_{ts}.pkl'))
-    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'valid_search_processed_{ts}.pkl'))
+    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'valid_processed.pkl'))
 
     dataloader_dict['train'] = DataLoader(dataset_dict['train'], batch_size=args.batch_size, num_workers=args.num_workers,
                                           shuffle=True, pin_memory=True, drop_last=True)

@@ -43,7 +43,8 @@ from model.classification.dataset import CustomDataset
 from model.optimizer.optimizer import get_optimizer
 from model.optimizer.scheduler import get_scheduler
 from utils.utils import TqdmLoggingHandler, write_log, get_huggingface_model_name, get_wandb_exp_name, get_torch_device, check_path
-from .preprocessing import load_data
+# from .preprocessing import load_data
+from .augment import load_preprocessed_data
 
 """
 Text autoaugment for classification using ray tune
@@ -88,8 +89,8 @@ def search(args):
                            resources={"cpu":1, "gpu":0.5}
                        ),
                        tune_config=tune.TuneConfig(
-                            num_samples=4,
-                            max_concurrent_trials=2,
+                            num_samples=200,
+                            max_concurrent_trials=1,
                             #metric=f'best_{args.optimize_objective}',
                             mode='max' if args.optimize_objective in ['accuracy', 'f1'] else 'min',
                             scheduler=AsyncHyperBandScheduler(),
@@ -100,8 +101,8 @@ def search(args):
                                project=args.proj_name,
                                log_config=True,
                                **{
-                                    "name": f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()}" if args.augmentation_type != 'ablation_no_labelsmoothing'
-                                            else f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / ablation_no_labelsmoothing",
+                                    "name": f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / {args.data_subsample_size.upper()}" if args.augmentation_type != 'ablation_no_labelsmoothing'
+                                            else f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / {args.data_subsample_size.upper()} / ablation_no_labelsmoothing",
                                     "config": args,
                                     "notes": args.description,
                                     "tags": ["SEARCH",
@@ -132,8 +133,9 @@ def search(args):
 
     print(f"Best policy: {best_policy}")
 
-    augmented_train_data, num_classes = augment_data(args, best_config)
-    ts = preprocess_augmented_data(args, augmented_train_data, num_classes, best_config, searched=True)
+    ts = augment_data(args, best_policy, searched=True)
+    # augmented_train_data, num_classes = augment_data(args, best_config)
+    # ts = preprocess_augmented_data(args, augmented_train_data, num_classes, best_config, searched=True)
 
     """
     if args.use_wandb:
@@ -187,8 +189,8 @@ def setup(args):
         'aug_magn_RS': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
         'aug_magn_RD': tune.uniform(policy_search_config['aug_magnitude'][0], policy_search_config['aug_magnitude'][1]),
         'aug_num': tune.randint(policy_search_config['aug_num'][0], policy_search_config['aug_num'][1]),
-        'ls_eps_ori': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type_list != 'ablation_no_labelsmoothing' else 0.0,
-        'ls_eps_aug': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type_list != 'ablation_no_labelsmoothing' else 0.0,
+        'ls_eps_ori': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type != 'ablation_no_labelsmoothing' else 0.0,
+        'ls_eps_aug': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type != 'ablation_no_labelsmoothing' else 0.0,
         'args': args,
     }
 
@@ -201,30 +203,35 @@ def setup(args):
 
     return setup_dict
 
-def augment_data(args, config):
+def augment_data(args, config, searched=False):
     """
     Augment data and construct augmented dataset from given policy
     """
 
     # Load data
-    train_data, _, _, num_classes = load_data(args)
+    train_data = load_preprocessed_data(args)
 
     augmenter = EDA()
 
     # Construct augmented dataset
-    augmented_train_data = {
-        'text': [],
-        'label': [],
-        'soft_label': [],
+    augmented_data = {
+        'input_ids': [],
+        'attention_mask': [],
+        'token_type_ids': [],
+        'labels': [],
+        'soft_labels': [],
+        'num_classes': train_data['num_classes'],
+        'vocab_size': train_data['vocab_size'],
+        'pad_token_id': train_data['pad_token_id'],
+        'augmentation_policy': train_data['augmentation_policy'],
     }
 
-    for text, label in zip(train_data['text'], train_data['label']):
-        # Append original data with label smoothing
-        augmented_train_data['text'].append(text)
-        augmented_train_data['label'].append(label)
-        soft_label = [0.0] * num_classes # Initialize soft label - list of 0.0s with length of num_classes
-        soft_label = [(1.0 - config['ls_eps_ori']) if i == label else (config['ls_eps_ori'] / (num_classes - 1)) for i in range(num_classes)]
-        augmented_train_data['soft_label'].append(soft_label)
+    # Reconstruct sentence from input_ids using huggingface tokenizer
+    model_name = get_huggingface_model_name(args.model_type)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    for idx in range(len(train_data['input_ids'])):
+        decoded_sent = tokenizer.decode(train_data['input_ids'][idx], skip_special_tokens=True)
 
         # Augment data and append augmented data with label smoothing
         if np.random.uniform(0.0, 1.0) < config['aug_prob']: # Augment or not
@@ -235,28 +242,72 @@ def augment_data(args, config):
             augmentation_type = np.random.choice(['SR', 'RI', 'RS', 'RD'], p=augmentation_type_prob)
 
             # Augment data using selected augmentation type
-            len_words = len(text.split())
+            len_words = len(decoded_sent.split())
             n_to_modify = max(1, int(config['aug_magn_' + augmentation_type] * len_words)) # Number of words to modify, minimum 1
             augmented_text = []
             if augmentation_type == 'SR':
-                augmented_text = [augmenter.synonym_replacement(text, n=n_to_modify) for _ in range(config['aug_num'])] # Augment n times
+                augmented_text = [augmenter.synonym_replacement(decoded_sent, n=n_to_modify) for _ in range(config['aug_num'])] # Augment n times
             elif augmentation_type == 'RI':
-                augmented_text = [augmenter.random_insertion(text, n=n_to_modify) for _ in range(config['aug_num'])]
+                augmented_text = [augmenter.random_insertion(decoded_sent, n=n_to_modify) for _ in range(config['aug_num'])]
             elif augmentation_type == 'RS':
-                augmented_text = [augmenter.random_swap(text, n=n_to_modify) for _ in range(config['aug_num'])]
+                augmented_text = [augmenter.random_swap(decoded_sent, n=n_to_modify) for _ in range(config['aug_num'])]
             elif augmentation_type == 'RD':
-                augmented_text = [augmenter.random_deletion(text, p=config['aug_magn_RD']) for _ in range(config['aug_num'])]
+                augmented_text = [augmenter.random_deletion(decoded_sent, p=config['aug_magn_RD']) for _ in range(config['aug_num'])]
 
-            soft_label = [0.0] * num_classes # Initialize soft label - list of 0.0s with length of num_classes
-            soft_label = [(1.0 - config['ls_eps_aug']) if i == label else (config['ls_eps_ori'] / (num_classes - 1)) for i in range(num_classes)]
+            soft_labels = train_data['soft_labels'][idx] * (1 - config['ls_eps_aug']) + (config['ls_eps_aug'] / train_data['num_classes']) # Apply label smoothing
 
             # Append augmented data with label smoothing
             for each_augmented_text in augmented_text:
-                augmented_train_data['text'].append(each_augmented_text)
-                augmented_train_data['label'].append(label)
-                augmented_train_data['soft_label'].append(soft_label)
+                # Encode augmented sentence using huggingface tokenizer
+                tokenized_sent = tokenizer(each_augmented_text, padding='max_length', truncation=True,
+                                           max_length=args.max_seq_len, return_tensors='pt')
 
-    return augmented_train_data, num_classes
+                # Append augmented data
+                augmented_data['input_ids'].append(tokenized_sent['input_ids'].squeeze())
+                augmented_data['attention_mask'].append(tokenized_sent['attention_mask'].squeeze())
+                if args.model_type in ['bert', 'albert', 'electra', 'deberta', 'debertav3']:
+                    augmented_data['token_type_ids'].append(tokenized_sent['token_type_ids'].squeeze())
+                else: # roberta does not use token_type_ids
+                    augmented_data['token_type_ids'].append(torch.zeros(args.max_seq_len, dtype=torch.long))
+                augmented_data['soft_labels'].append(soft_labels) # Apply label-smoothened soft labels
+                augmented_data['labels'].append(train_data['labels'][idx]) # Keep the hard labels as they are
+
+    # Apply label smoothing to original data
+    for idx in range(len(train_data['input_ids'])):
+        soft_labels = train_data['soft_labels'][idx] * (1 - config['ls_eps_ori']) + (config['ls_eps_ori'] / train_data['num_classes'])
+        train_data['soft_labels'][idx] = soft_labels # Apply label-smoothened soft labels
+
+    # Merge augmented data with original data
+    total_dict = {
+        'input_ids': train_data['input_ids'] + augmented_data['input_ids'],
+        'attention_mask': train_data['attention_mask'] + augmented_data['attention_mask'],
+        'token_type_ids': train_data['token_type_ids'] + augmented_data['token_type_ids'],
+        'labels': train_data['labels'] + augmented_data['labels'],
+        'soft_labels': train_data['soft_labels'] + augmented_data['soft_labels'],
+        'num_classes': train_data['num_classes'],
+        'vocab_size': train_data['vocab_size'],
+        'pad_token_id': train_data['pad_token_id'],
+        'augmentation_policy': train_data['augmentation_policy'],
+    }
+
+    # Save data as pickle file
+    ts = time.strftime('%Y-%b-%d-%H:%M:%S', time.localtime())
+    preprocessed_path = os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type)
+    check_path(preprocessed_path)
+
+    if searched: # Optimal policy searched through AutoAugment
+        if args.augmentation_type == 'ablation_no_labelsmoothing':
+            save_name = f'train_optimal_ablation_{args.data_subsample_size}.pkl'
+        else:
+            save_name = f'train_optimal_{args.data_subsample_size}.pkl'
+
+        print(f"Saving augmented data with searched optimal policy to {os.path.join(preprocessed_path, save_name)}")
+    else:
+        save_name = f'train_search_ongoing_{ts}_{args.data_subsample_size}.pkl'
+    with open(os.path.join(preprocessed_path, save_name), 'wb') as f:
+        pickle.dump(total_dict, f)
+
+    return ts
 
 def preprocess_augmented_data(args, augmented_train_data, num_classes, config, searched=False):
     # Define tokenizer & config
@@ -313,13 +364,13 @@ def preprocess_augmented_data(args, augmented_train_data, num_classes, config, s
     # Save data as pickle file
     if searched: # Optimal policy searched through AutoAugment
         if args.augmentation_type_list == 'ablation_no_labelsmoothing':
-            save_name = f'train_optimal_augmented_ablation.pkl'
+            save_name = f'train_optimal_ablation_{args.data_subsample_size}.pkl'
         else:
-            save_name = f'train_optimal_augmented.pkl'
+            save_name = f'train_optimal_{args.data_subsample_size}.pkl'
 
         print(f"Saving augmented data with searched optimal policy to {os.path.join(preprocessed_path, save_name)}")
     else:
-        save_name = f'train_search_processed_{ts}.pkl'
+        save_name = f'train_search_ongoing_{ts}_{args.data_subsample_size}.pkl'
     with open(os.path.join(preprocessed_path, save_name), 'wb') as f:
         pickle.dump(augmented_data, f)
 
@@ -333,8 +384,8 @@ def evaluate_policy(args, policy, ts):
     # Load dataset and define dataloader
 
     dataset_dict, dataloader_dict = {}, {}
-    dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'train_search_processed_{ts}.pkl'))
-    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'valid_processed.pkl'))
+    dataset_dict['train'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'train_search_ongoing_{ts}_{args.data_subsample_size}.pkl'))
+    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'valid_original_full.pkl'))
 
     dataloader_dict['train'] = DataLoader(dataset_dict['train'], batch_size=args.batch_size, num_workers=args.num_workers,
                                           shuffle=True, pin_memory=True, drop_last=True)
@@ -479,8 +530,9 @@ def evaluate_policy(args, policy, ts):
 def objective(config, checkpoint_dir=None):
     assert torch.cuda.is_available() == True
 
-    augmented_train_data, soft_valid_data, soft_test_data, num_classes = augment_data(config['args'], config)
-    ts = preprocess_augmented_data(config['args'], augmented_train_data, soft_valid_data, soft_test_data, num_classes, config)
+    ts = augment_data(config['args'], config)
+    # augmented_train_data, soft_valid_data, soft_test_data, num_classes = augment_data(config['args'], config)
+    # ts = preprocess_augmented_data(config['args'], augmented_train_data, soft_valid_data, soft_test_data, num_classes, config)
     _, best_valid_objective_value = evaluate_policy(config['args'], config, ts)
 
     session.report({f"best_{config['args'].optimize_objective}": best_valid_objective_value})

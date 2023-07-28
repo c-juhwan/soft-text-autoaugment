@@ -418,5 +418,34 @@ def preprocessing(args: argparse.Namespace) -> None:
             data_dict[split]['soft_labels'].append(torch.tensor(soft_label, dtype=torch.float)) # Label Smoothing Loss
 
         # Save data as pickle file
-        with open(os.path.join(preprocessed_path, f'{split}_processed.pkl'), 'wb') as f:
+        with open(os.path.join(preprocessed_path, f'{split}_original_full.pkl'), 'wb') as f:
             pickle.dump(data_dict[split], f)
+
+    # Low-resource simulation for train data
+    for each_size in [100, 500, 1000, 2000]:
+        # Subsample train data
+        subsampled_train_data = {
+            'input_ids': [],
+            'attention_mask': [],
+            'token_type_ids': [],
+            'labels': [],
+            'soft_labels': [],
+            'num_classes': num_classes,
+            'vocab_size': config.vocab_size,
+            'pad_token_id': tokenizer.pad_token_id,
+            'augmentation_policy': None
+        }
+
+        # Randomly select data
+        random_idx = torch.randperm(len(data_dict['train']['input_ids']))[:each_size]
+
+        for idx in random_idx:
+            subsampled_train_data['input_ids'].append(data_dict['train']['input_ids'][idx])
+            subsampled_train_data['attention_mask'].append(data_dict['train']['attention_mask'][idx])
+            subsampled_train_data['token_type_ids'].append(data_dict['train']['token_type_ids'][idx])
+            subsampled_train_data['labels'].append(data_dict['train']['labels'][idx])
+            subsampled_train_data['soft_labels'].append(data_dict['train']['soft_labels'][idx])
+
+        # Save data as pickle file
+        with open(os.path.join(preprocessed_path, f'train_original_{each_size}.pkl'), 'wb') as f:
+            pickle.dump(subsampled_train_data, f)

@@ -118,7 +118,9 @@ def get_wandb_exp_name(args: argparse.Namespace):
     exp_name = str()
     exp_name += "%s - " % args.task.upper()
     exp_name += "%s / " % args.task_dataset.upper()
-    exp_name += "%s" % args.model_type.upper()
+    exp_name += "%s / " % args.model_type.upper()
+    exp_name += "%s / " % args.augmentation_type.upper()
+    exp_name += "%s" % args.data_subsample_size.upper()
 
     return exp_name
 

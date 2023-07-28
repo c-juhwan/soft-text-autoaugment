@@ -40,8 +40,8 @@ def testing(args: argparse.Namespace) -> tuple:
     # Load dataset and define dataloader
     write_log(logger, "Loading dataset")
     dataset_dict, dataloader_dict = {}, {}
-    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'valid_processed.pkl'))
-    dataset_dict['test'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'test_processed.pkl'))
+    dataset_dict['valid'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'valid_original_full.pkl'))
+    dataset_dict['test'] = CustomDataset(os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'test_original_full.pkl'))
 
     dataloader_dict['valid'] = DataLoader(dataset_dict['valid'], batch_size=args.batch_size, num_workers=args.num_workers,
                                           shuffle=False, pin_memory=True, drop_last=False)
@@ -62,15 +62,15 @@ def testing(args: argparse.Namespace) -> tuple:
     # Load model weights
     write_log(logger, "Loading model weights")
     if args.augmentation_type == 'none':
-        final_model_save_name = 'final_model_noaug.pt'
+        final_model_save_name = f'final_model_noaug_{args.data_subsample_size}.pt'
     elif args.augmentation_type in ['hard_eda', 'soft_eda', 'aeda']:
         final_model_save_name = f'final_model_{args.augmentation_type}.pt'
     elif args.augmentation_type == 'soft_text_autoaugment_searched':
-        final_model_save_name = 'final_model_softtaa.pt'
+        final_model_save_name = f'final_model_softtaa_{args.data_subsample_size}.pt'
     elif args.augmentation_type == 'ablation_no_labelsmoothing':
-        final_model_save_name = 'final_model_ablation_nols.pt'
+        final_model_save_name = f'final_model_ablation_nols_{args.data_subsample_size}.pt'
     elif args.augmentation_type == 'ablation_generalization':
-        final_model_save_name = 'final_model_ablation_generalization.pt'
+        final_model_save_name = f'final_model_ablation_generalization_{args.data_subsample_size}.pt'
     load_model_name = os.path.join(args.model_path, args.task, args.task_dataset, args.model_type, final_model_save_name)
     model = model.to('cpu')
     checkpoint = torch.load(load_model_name, map_location='cpu')
@@ -92,7 +92,7 @@ def testing(args: argparse.Namespace) -> tuple:
                          f"Model: {args.model_type}"])
 
     # Define loss function
-    cls_loss = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing_eps)
+    cls_loss = nn.CrossEntropyLoss()
     write_log(logger, f"Loss function: {cls_loss}")
 
     # Test - Start testing on valid set
@@ -100,7 +100,7 @@ def testing(args: argparse.Namespace) -> tuple:
     valid_loss_cls = 0
     valid_acc_cls = 0
     valid_f1_cls = 0
-    for test_iter_idx, data_dicts in enumerate(tqdm(dataloader_dict['test'], total=len(dataloader_dict['test']), desc="Testing", position=0, leave=True)):
+    for valid_iter_idx, data_dicts in enumerate(tqdm(dataloader_dict['valid'], total=len(dataloader_dict['valid']), desc="Testing on VALID Set", position=0, leave=True)):
         # Test - Get input data
         input_ids = data_dicts['input_ids'].to(device)
         attention_mask = data_dicts['attention_mask'].to(device)
@@ -121,22 +121,22 @@ def testing(args: argparse.Namespace) -> tuple:
         valid_acc_cls += batch_acc_cls.item()
         valid_f1_cls += batch_f1_cls
 
-        if test_iter_idx % args.log_freq == 0 or test_iter_idx == len(dataloader_dict['test']) - 1:
-            write_log(logger, f"TEST - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - Loss: {batch_loss_cls.item():.4f}")
-            write_log(logger, f"TEST - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - Acc: {batch_acc_cls.item():.4f}")
-            write_log(logger, f"TEST - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - F1: {batch_f1_cls:.4f}")
+        if valid_iter_idx % args.log_freq == 0 or valid_iter_idx == len(dataloader_dict['valid']) - 1:
+            write_log(logger, f"TEST(V) - Iter [{valid_iter_idx}/{len(dataloader_dict['valid'])}] - Loss: {batch_loss_cls.item():.4f}")
+            write_log(logger, f"TEST(V) - Iter [{valid_iter_idx}/{len(dataloader_dict['valid'])}] - Acc: {batch_acc_cls.item():.4f}")
+            write_log(logger, f"TEST(V) - Iter [{valid_iter_idx}/{len(dataloader_dict['valid'])}] - F1: {batch_f1_cls:.4f}")
 
     # Test - Check loss
-    valid_loss_cls /= len(dataloader_dict['test'])
-    valid_acc_cls /= len(dataloader_dict['test'])
-    valid_f1_cls /= len(dataloader_dict['test'])
+    valid_loss_cls /= len(dataloader_dict['valid'])
+    valid_acc_cls /= len(dataloader_dict['valid'])
+    valid_f1_cls /= len(dataloader_dict['valid'])
 
     # Test - Start testing on test set
     model = model.eval()
     test_loss_cls = 0
     test_acc_cls = 0
     test_f1_cls = 0
-    for test_iter_idx, data_dicts in enumerate(tqdm(dataloader_dict['test'], total=len(dataloader_dict['test']), desc="Testing", position=0, leave=True)):
+    for test_iter_idx, data_dicts in enumerate(tqdm(dataloader_dict['test'], total=len(dataloader_dict['test']), desc="Testing on TEST Set", position=0, leave=True)):
         # Test - Get input data
         input_ids = data_dicts['input_ids'].to(device)
         attention_mask = data_dicts['attention_mask'].to(device)
@@ -158,9 +158,9 @@ def testing(args: argparse.Namespace) -> tuple:
         test_f1_cls += batch_f1_cls
 
         if test_iter_idx % args.log_freq == 0 or test_iter_idx == len(dataloader_dict['test']) - 1:
-            write_log(logger, f"TEST - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - Loss: {batch_loss_cls.item():.4f}")
-            write_log(logger, f"TEST - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - Acc: {batch_acc_cls.item():.4f}")
-            write_log(logger, f"TEST - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - F1: {batch_f1_cls:.4f}")
+            write_log(logger, f"TEST(T) - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - Loss: {batch_loss_cls.item():.4f}")
+            write_log(logger, f"TEST(T) - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - Acc: {batch_acc_cls.item():.4f}")
+            write_log(logger, f"TEST(T) - Iter [{test_iter_idx}/{len(dataloader_dict['test'])}] - F1: {batch_f1_cls:.4f}")
 
     # Test - Check loss
     test_loss_cls /= len(dataloader_dict['test'])
@@ -168,7 +168,8 @@ def testing(args: argparse.Namespace) -> tuple:
     test_f1_cls /= len(dataloader_dict['test'])
 
     # Final - End of testing
-    write_log(logger, f"Done! - TEST - Loss: {test_loss_cls:.4f} - Acc: {test_acc_cls:.4f} - F1: {test_f1_cls:.4f}")
+    write_log(logger, f"Done! - VALID SET - Loss: {valid_loss_cls:.4f} - Acc: {valid_acc_cls:.4f} - F1: {valid_f1_cls:.4f}")
+    write_log(logger, f"Done! - TEST SET - Loss: {test_loss_cls:.4f} - Acc: {test_acc_cls:.4f} - F1: {test_f1_cls:.4f}")
     if args.use_tensorboard:
         writer.add_scalar('TEST/Loss', test_loss_cls, 0)
         writer.add_scalar('TEST/Acc', test_acc_cls, 0)
@@ -178,6 +179,8 @@ def testing(args: argparse.Namespace) -> tuple:
         wandb_df = pd.DataFrame({
             'Dataset': [args.task_dataset],
             'Model': [args.model_type],
+            'Augmentation': [args.augmentation_type],
+            'Dataset_size': [args.data_subsample_size],
             'Valid_Acc': [valid_acc_cls],
             'Valid_F1': [valid_f1_cls],
             'Valid_Loss': [valid_loss_cls],

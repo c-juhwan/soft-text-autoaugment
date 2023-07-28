@@ -28,7 +28,7 @@ def load_preprocessed_data(args: argparse.Namespace) -> dict:
         train_data (dict): Preprocessed training data.
     """
 
-    preprocessed_path = os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, 'train_processed.pkl')
+    preprocessed_path = os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'train_original_{args.data_subsample_size}.pkl')
 
     with open(preprocessed_path, 'rb') as f:
         train_data = pickle.load(f)
@@ -59,10 +59,10 @@ def augmentation(args: argparse.Namespace) -> None:
 
         # Apply each augmentation
         if args.augmentation_type == 'hard_eda':
-            augmented_sent = run_eda(decoded_sent)
+            augmented_sent = run_eda(decoded_sent, args)
             augmented_data['soft_labels'].append(train_data['soft_labels'][idx]) # Keep the soft labels as they are
         elif args.augmentation_type == 'soft_eda':
-            augmented_sent = run_eda(decoded_sent)
+            augmented_sent = run_eda(decoded_sent, args)
             soft_labels = train_data['soft_labels'][idx] * (1 - args.softeda_smoothing) + (args.softeda_smoothing / train_data['num_classes']) # Apply label smoothing
             augmented_data['soft_labels'].append(soft_labels) # Apply label-smoothened soft labels
         elif args.augmentation_type == 'aeda':
@@ -84,30 +84,30 @@ def augmentation(args: argparse.Namespace) -> None:
         else: # roberta does not use token_type_ids
             augmented_data['token_type_ids'].append(torch.zeros(args.max_seq_len, dtype=torch.long))
 
-        # Merge augmented data with original data
-        total_dict = {
-            'input_ids': train_data['input_ids'] + augmented_data['input_ids'],
-            'attention_mask': train_data['attention_mask'] + augmented_data['attention_mask'],
-            'token_type_ids': train_data['token_type_ids'] + augmented_data['token_type_ids'],
-            'labels': train_data['labels'] + augmented_data['labels'],
-            'soft_labels': train_data['soft_labels'] + augmented_data['soft_labels'],
-            'num_classes': train_data['num_classes'],
-            'vocab_size': train_data['vocab_size'],
-            'pad_token_id': train_data['pad_token_id'],
-            'augmentation_policy': train_data['augmentation_policy'], # None.
-        }
+    # Merge augmented data with original data
+    total_dict = {
+        'input_ids': train_data['input_ids'] + augmented_data['input_ids'],
+        'attention_mask': train_data['attention_mask'] + augmented_data['attention_mask'],
+        'token_type_ids': train_data['token_type_ids'] + augmented_data['token_type_ids'],
+        'labels': train_data['labels'] + augmented_data['labels'],
+        'soft_labels': train_data['soft_labels'] + augmented_data['soft_labels'],
+        'num_classes': train_data['num_classes'],
+        'vocab_size': train_data['vocab_size'],
+        'pad_token_id': train_data['pad_token_id'],
+        'augmentation_policy': train_data['augmentation_policy'], # None.
+    }
 
-        # Save total data as pickle file
-        save_path = os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type, f'train_augmented_{args.augmentation_type}.pkl')
-        check_path(save_path)
-        with open(save_path, 'wb') as f:
-            pickle.dump(total_dict, f)
+    # Save total data as pickle file
+    save_path = os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type)
+    check_path(save_path)
+    with open(os.path.join(save_path, f'train_{args.augmentation_type}_{args.data_subsample_size}.pkl'), 'wb') as f:
+        pickle.dump(total_dict, f)
 
-def run_eda(sentence: str) -> str:
+def run_eda(sentence: str, args: argparse.Namespace) -> str:
     augmenter = EDA()
 
     len_words = len(sentence.split(' '))
-    n_to_modify = max(1, int(0.1 * len_words)) # Default value of alpha is 0.1 - Modify 10% of the words in the sentence
+    n_to_modify = max(1, int(args.eda_alpha * len_words)) # Default value of alpha is 0.1 - Modify 10% of the words in the sentence
 
     augmentation_type = np.random.choice(['SR', 'RI', 'RS', 'RD'], p=[0.25, 0.25, 0.25, 0.25]) # Select augmentation type randomly
 
@@ -138,7 +138,7 @@ def run_aeda(sentence: str, args: argparse.Namespace) -> str:
     words = sentence.split(' ')
     words = [word for word in words if word != '']
     len_words = len(words)
-    n_aeda = max(1, int(args.augmentation_aeda_alpha * len_words))
+    n_aeda = max(1, int(args.eda_alpha * len_words))
 
     new_words = aeda_random_insertion(words, n_aeda)
 

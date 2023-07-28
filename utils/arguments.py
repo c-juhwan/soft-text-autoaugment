@@ -51,12 +51,17 @@ class ArgParser():
                                  help='Whether to use bidirectional RNNs; Default is True')
         self.parser.add_argument('--min_seq_len', type=int, default=4,
                                  help='Minimum sequence length of the input; Default is 4')
-        self.parser.add_argument('--max_seq_len', type=int, default=100,
-                                 help='Maximum sequence length of the input; Default is 100')
+        self.parser.add_argument('--max_seq_len', type=int, default=128,
+                                 help='Maximum sequence length of the input; Default is 128')
         self.parser.add_argument('--dropout_rate', type=float, default=0.2,
                                  help='Dropout rate of the model; Default is 0.2')
         self.parser.add_argument('--softeda_smoothing', type=float, default=0.1,
                                  help='Label smoothing epsilon for softEDA; Default is 0.1')
+        self.parser.add_argument('--eda_alpha', type=float, default=0.1,
+                                 help='Alpha value for EDA&AEDA; Default is 0.1')
+        data_subsample_size_list = ['full', '100', '500', '1000', '2000']
+        self.parser.add_argument('--data_subsample_size', type=str, choices=data_subsample_size_list, default='full', # Default is full - No subsampling
+                                 help='Subsample size of the dataset to simulate low-resource environment; Default is full')
 
         # Model - Size arguments
         self.parser.add_argument('--embed_size', type=int, default=768, # Will be automatically specified by the model type if model is PLM
@@ -89,7 +94,7 @@ class ArgParser():
         self.parser.add_argument('--batch_size', type=int, default=32,
                                  help='Batch size; Default is 32')
         self.parser.add_argument('--weight_decay', type=float, default=0,
-                                 help='Weight decay; Default is 5e-4; If 0, no weight decay')
+                                 help='Weight decay; Default is 0; If 0, no weight decay')
         self.parser.add_argument('--clip_grad_norm', type=int, default=5,
                                  help='Gradient clipping norm; Default is 5')
         self.parser.add_argument('--early_stopping_patience', type=int, default=5,

@@ -267,7 +267,7 @@ def load_data(args: argparse.Namespace) -> tuple: # (dict, dict, dict, int)
         test_data['text'] = test_df['text'].tolist()
         test_data['label'] = test_df['label'].tolist()
     elif name == 'yelp_full':
-        dataset = load_dataset('yelp_full')
+        dataset = load_dataset('yelp_review_full')
 
         train_df = pd.DataFrame(dataset['train'])
         #valid_df = pd.DataFrame(dataset['validation']) # No pre-defined validation set

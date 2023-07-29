@@ -1,18 +1,19 @@
-DATASET_ARRAY=(sst2 cola trec subj imdb)
+DATASET_ARRAY=(agnews yelp_full)
 MODEL_ARRAY=(bert debertav3)
-DATA_SIZE_ARRAY=(full 100 500 1000 2000)
+DATA_SIZE_ARRAY=(100 500 1000)
 AUG_ARRAY=(none hard_eda soft_eda aeda)
 BS=32
 LR=5e-5
 EP=10
-DEVICE=cuda:3
+DEVICE=cuda:0
 
 clear
 
 for DATASET in ${DATASET_ARRAY[@]}
 do
-if [ ${DATASET} == "imdb" ]
-then
+if [ ${DATASET} == "imdb" ]; then
+    LEN=512
+elif [ ${DATASET} == "yelp_full" ]; then
     LEN=512
 else
     LEN=128

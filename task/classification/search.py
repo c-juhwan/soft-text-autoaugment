@@ -4,6 +4,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false" # This prevents tokenizers from t
 import sys
 import time
 import pickle
+import shutil
 import logging
 import argparse
 # 3rd-party Modules
@@ -89,8 +90,8 @@ def search(args):
                            resources={"cpu":1, "gpu":0.5}
                        ),
                        tune_config=tune.TuneConfig(
-                            num_samples=200,
-                            max_concurrent_trials=1,
+                            num_samples=100,
+                            max_concurrent_trials=2,
                             #metric=f'best_{args.optimize_objective}',
                             mode='max' if args.optimize_objective in ['accuracy', 'f1'] else 'min',
                             scheduler=AsyncHyperBandScheduler(),
@@ -115,6 +116,8 @@ def search(args):
 
     # Search
     result_grid = tuner.fit()
+    best_result = result_grid.get_best_result()
+    print(f"Best result: {best_result}")
     best_config = result_grid.get_best_result().config
     best_policy = {
         'aug_prob': best_config['aug_prob'],
@@ -133,7 +136,31 @@ def search(args):
 
     print(f"Best policy: {best_policy}")
 
-    ts = augment_data(args, best_policy, searched=True)
+    # Save the augmented data with best policy to pickle file using ts
+    preprocessed_path = os.path.join(args.preprocess_path, args.task, args.task_dataset, args.model_type)
+    shutil.copy(os.path.join(preprocessed_path, f'train_search_ongoing_{best_config["ts"]}_{args.data_subsample_size}.pkl'),
+                os.path.join(preprocessed_path, f'train_optimal_{args.data_subsample_size}.pkl'))
+    print(f"Saved the augmented data with best policy to {os.path.join(preprocessed_path, f'train_optimal_{args.data_subsample_size}.pkl')}")
+
+    checkpoint_path = os.path.join(args.checkpoint_path, args.task, args.task_dataset, args.model_type)
+    if args.augmentation_type == 'ablation_no_labelsmoothing':
+        checkpoint_save_name = f'checkpoint_ablation_search_ongoing_{best_config["ts"]}_{args.data_subsample_size}.pt'
+    else:
+        checkpoint_save_name = f'checkpoint_search_ongoing_{best_config["ts"]}_{args.data_subsample_size}.pt'
+
+    model_save_path = os.path.join(args.model_path, args.task, args.task_dataset, args.model_type)
+    check_path(model_save_path)
+    if args.augmentation_type == 'ablation_no_labelsmoothing':
+        model_save_name = f'final_model_ablation_nols_{args.data_subsample_size}.pt'
+    else:
+        model_save_name = f'final_model_softtaa_{args.data_subsample_size}.pt'
+    shutil.copy(os.path.join(checkpoint_path, checkpoint_save_name),
+                os.path.join(model_save_path, model_save_name))
+    print(f"Saved the model with best policy to {os.path.join(model_save_path, model_save_name)}")
+
+
+
+    # ts = augment_data(args, best_policy, searched=True)
     # augmented_train_data, num_classes = augment_data(args, best_config)
     # ts = preprocess_augmented_data(args, augmented_train_data, num_classes, best_config, searched=True)
 
@@ -307,6 +334,7 @@ def augment_data(args, config, searched=False):
     with open(os.path.join(preprocessed_path, save_name), 'wb') as f:
         pickle.dump(total_dict, f)
 
+    config['ts'] = ts
     return ts
 
 def preprocess_augmented_data(args, augmented_train_data, num_classes, config, searched=False):
@@ -504,6 +532,22 @@ def evaluate_policy(args, policy, ts):
             best_valid_objective_value = valid_objective_value
             best_epoch_idx = epoch_idx
             early_stopping_counter = 0 # Reset early stopping counter
+
+            # Save model
+            checkpoint_save_path = os.path.join(args.checkpoint_path, args.task, args.task_dataset, args.model_type)
+            check_path(checkpoint_save_path)
+
+            if args.augmentation_type == 'ablation_no_labelsmoothing':
+                checkpoint_save_name = f'checkpoint_ablation_search_ongoing_{ts}_{args.data_subsample_size}.pt'
+            else:
+                checkpoint_save_name = f'checkpoint_search_ongoing_{ts}_{args.data_subsample_size}.pt'
+
+            torch.save({
+                'epoch': epoch_idx,
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict() if scheduler is not None else None
+            }, os.path.join(checkpoint_save_path, checkpoint_save_name))
         else:
             early_stopping_counter += 1
 

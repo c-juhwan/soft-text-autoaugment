@@ -2,6 +2,7 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false" # This prevents tokenizers from taking all cpus
 import sys
+import shutil
 import logging
 import argparse
 # 3rd-party Modules

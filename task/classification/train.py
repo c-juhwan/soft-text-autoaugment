@@ -300,11 +300,14 @@ def training(args: argparse.Namespace) -> None:
     elif args.augmentation_type in ['hard_eda', 'soft_eda', 'aeda']:
         final_model_save_name = f'final_model_{args.augmentation_type}.pt'
     elif args.augmentation_type == 'soft_text_autoaugment_searched':
-        final_model_save_name = f'final_model_softtaa_{args.data_subsample_size}.pt'
+        # final_model_save_name = f'final_model_softtaa_{args.data_subsample_size}.pt'
+        raise NotImplementedError("Not here")
     elif args.augmentation_type == 'ablation_no_labelsmoothing':
-        final_model_save_name = f'final_model_ablation_nols_{args.data_subsample_size}.pt'
+        # final_model_save_name = f'final_model_ablation_nols_{args.data_subsample_size}.pt'
+        raise NotImplementedError("Not here")
     elif args.augmentation_type == 'ablation_generalization':
-        final_model_save_name = f'final_model_ablation_generalization_{args.data_subsample_size}.pt'
+        # final_model_save_name = f'final_model_ablation_generalization_{args.data_subsample_size}.pt'
+        raise NotImplementedError("Not yet")
     check_path(final_model_save_path)
     shutil.copyfile(os.path.join(checkpoint_save_path, 'checkpoint.pt'), os.path.join(final_model_save_path, final_model_save_name)) # Copy best checkpoint as final model
     write_log(logger, f"FINAL - Saved final model to {final_model_save_path}")

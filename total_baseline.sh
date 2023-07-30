@@ -1,4 +1,4 @@
-DATASET_ARRAY=(agnews yelp_full)
+DATASET_ARRAY=(trec)
 MODEL_ARRAY=(bert debertav3)
 DATA_SIZE_ARRAY=(100 500 1000)
 AUG_ARRAY=(none hard_eda soft_eda aeda)

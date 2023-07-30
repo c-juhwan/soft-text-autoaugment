@@ -97,21 +97,21 @@ def search(args):
                             scheduler=AsyncHyperBandScheduler(),
                             search_alg=HyperOptSearch(),
                         ),
-                       run_config=air.RunConfig(
-                           callbacks=[WandbLoggerCallback(
-                               project=args.proj_name,
-                               log_config=True,
-                               **{
-                                    "name": f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / {args.data_subsample_size.upper()}" if args.augmentation_type != 'ablation_no_labelsmoothing'
-                                            else f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / {args.data_subsample_size.upper()} / ablation_no_labelsmoothing",
-                                    "config": args,
-                                    "notes": args.description,
-                                    "tags": ["SEARCH",
-                                            f"Dataset: {args.task_dataset}",
-                                            f"Model: {args.model_type}"],
-                               }
-                           )]
-                        ),
+                    #    run_config=air.RunConfig(
+                    #        callbacks=[WandbLoggerCallback(
+                    #            project=args.proj_name,
+                    #            log_config=True,
+                    #            **{
+                    #                 "name": f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / {args.data_subsample_size.upper()}" if args.augmentation_type != 'ablation_no_labelsmoothing'
+                    #                         else f"SEARCH - {args.task_dataset.upper()} / {args.model_type.upper()} / {args.data_subsample_size.upper()} / ablation_no_labelsmoothing",
+                    #                 "config": args,
+                    #                 "notes": args.description,
+                    #                 "tags": ["SEARCH",
+                    #                         f"Dataset: {args.task_dataset}",
+                    #                         f"Model: {args.model_type}"],
+                    #            }
+                    #        )]
+                    #     ),
                        param_space=policy_search_space)
 
     # Search
@@ -158,7 +158,15 @@ def search(args):
                 os.path.join(model_save_path, model_save_name))
     print(f"Saved the model with best policy to {os.path.join(model_save_path, model_save_name)}")
 
-
+    # Delete the ongoing pickle file
+    # Delete the file that contains "search_ongoing" in its name
+    for file_name in os.listdir(preprocessed_path):
+        if 'train_search_ongoing_' in file_name and args.data_subsample_size in file_name:
+            os.remove(os.path.join(preprocessed_path, file_name))
+    for file_name in os.listdir(checkpoint_path):
+        if 'checkpoint_search_ongoing_' in file_name and args.data_subsample_size in file_name:
+            os.remove(os.path.join(checkpoint_path, file_name))
+    print("Deleted all ongoing data file and checkpoint file")
 
     # ts = augment_data(args, best_policy, searched=True)
     # augmented_train_data, num_classes = augment_data(args, best_config)
@@ -219,6 +227,7 @@ def setup(args):
         'ls_eps_ori': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type != 'ablation_no_labelsmoothing' else 0.0,
         'ls_eps_aug': tune.uniform(policy_search_config['label_smoothing_eps'][0], policy_search_config['label_smoothing_eps'][1]) if args.augmentation_type != 'ablation_no_labelsmoothing' else 0.0,
         'args': args,
+        'ts': None, # ts will be assigned later
     }
 
     setup_dict = {
@@ -555,6 +564,7 @@ def evaluate_policy(args, policy, ts):
         if early_stopping_counter >= args.early_stopping_patience:
             break
 
+    """
     # Valid - Logging
     if args.use_wandb:
         global log_df, Trial_Num
@@ -568,6 +578,7 @@ def evaluate_policy(args, policy, ts):
             'Best Epoch': best_epoch_idx,
             'Best ACC': best_valid_objective_value,
         }, ignore_index=True)
+    """
 
     return best_epoch_idx, best_valid_objective_value
 

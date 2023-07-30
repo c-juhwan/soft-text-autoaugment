@@ -1,4 +1,4 @@
-DATASET_ARRAY=(sst2 sst5 cola trec subj agnews imdb yelp_full)
+DATASET_ARRAY=(sst2 sst5 cola trec subj) # (agnews imdb yelp_full)
 MODEL_TYPE=debertav3
 DATA_SIZE_ARRAY=(100 500 1000)
 AUG_TYPE=soft_text_autoaugment_searched

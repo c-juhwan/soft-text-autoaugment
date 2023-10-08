@@ -112,8 +112,8 @@ class ArgParser():
         # Other arguments - Device, Seed, Logging, etc.
         self.parser.add_argument('--device', type=str, default='cuda:0',
                                  help='Device to use for training; Default is cuda')
-        self.parser.add_argument('--seed', type=int, default=2023,
-                                 help='Random seed; Default is 2023')
+        self.parser.add_argument('--seed', type=int, default=None,
+                                 help='Random seed; Default is None')
         self.parser.add_argument('--use_tensorboard', type=parse_bool, default=True,
                                  help='Using tensorboard; Default is True')
         self.parser.add_argument('--use_wandb', type=parse_bool, default=True,
